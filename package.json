@@ -1,0 +1,14 @@
+{
+  "name": "@zealandia-systems/swordfish-post-fusion360",
+  "version": "1.1.1",
+  "contributors": [
+    {
+      "name": "Scott Mohekey",
+      "email": "scott.mohekey@zealandia.systems"
+    },
+    {
+      "name": "Liam Beale",
+      "email": "liam.beale@zealandia.systems"
+    }
+  ]
+}
