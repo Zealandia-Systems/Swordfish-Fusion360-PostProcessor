@@ -11,20 +11,20 @@ jobs:
     outputs:
       tag_name: ${{ steps.step2.outputs.tagname }}
     steps:
-    - id: step1
-      uses: actions/checkout@v2
-    - id: step2
-      uses: Klemensas/action-autotag@stable
-      with:
-        GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+      - id: step1
+        uses: actions/checkout@v2
+      - id: step2
+        uses: Klemensas/action-autotag@stable
+        with:
+          GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
 
   template:
     needs: tag
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
-    - uses: vafinvr/template-env-action@master
-      env:
-        VERSION: ${{ needs.tag.outputs.tag_name }}
-      with:
-        filename: ${{ runner.workspace }}/Swordfish-Post-Fusion360/Swordfish.cps
+      - uses: actions/checkout@v2
+      - uses: vafinvr/template-env-action@master
+        env:
+          VERSION: ${{ needs.tag.outputs.tag_name }}
+        with:
+          filename: ${{ runner.workspace }}/Swordfish-Post-Fusion360/Swordfish.cps
