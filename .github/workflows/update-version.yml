@@ -22,8 +22,8 @@ jobs:
     needs: tag
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: vafinvr/template-env-action@master
+    - uses: actions/checkout@v2
+    - uses: vafinvr/template-env-action@master
       env:
         VERSION: ${{ needs.tag.outputs.tag_name }}
       with:
