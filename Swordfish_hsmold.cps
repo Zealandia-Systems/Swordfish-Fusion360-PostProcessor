@@ -1,6 +1,5 @@
 /*
-https://github.com/zealandia-systems/swordfish_posts_processor
-
+homepage = "%homepage%";
 version = "%version%";
 */
 
