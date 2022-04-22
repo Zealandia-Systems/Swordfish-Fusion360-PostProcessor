@@ -10,5 +10,8 @@
       "name": "Liam Beale",
       "email": "liam.beale@zealandia.systems"
     }
-  ]
+  ],
+  "zealandia.systems": {
+    "post": "Swordfish.cps"
+  }
 }
