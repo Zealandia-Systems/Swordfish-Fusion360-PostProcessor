@@ -43,13 +43,12 @@ properties = {
 	},
 	jobUseArcs: {
 		title: "Job: Use Arcs",
-		description: "Use G2/G3 g-codes fo circular movements",
+		description: "Use G2/G3 G-codes fo circular movements",
 		group: "configuration",
 		type: "boolean",
 		value: true,
 		scope: "post"
 	},
-
 	jobSetOriginOnStart: {
 		title: "Job: Reset on start (G92)",
 		description: "Set origin when gcode start (G92)",
@@ -60,11 +59,26 @@ properties = {
 	},
 	jobGoOriginOnFinish: {
 		title: "Job: Goto 0 at end",
-		description: "Go X0 Y0 at gcode end",
+		description: "G0 X0 Y0 at gcode end",
 		group: "configuration",
 		type: "boolean",
 		value: true,
 		scope: "post"
+	},
+	fourthAxis: {
+		title: "Fourth axis",
+		description: "Select fourth axis orientation",
+		group: "configuration",
+		scope: "post",
+		type: "enum",
+		values: [
+			{ title: "None", id: "0" },
+			{ title: "Along X", id: "1" },
+			{ title: "Along X (Inverted)", id: "2" },
+			{ title: "Along Y", id: "3" },
+			{ title: "Along Y (Inverted)", id: "4" },
+		],
+		value: "0"
 	},
 
 	/*
@@ -116,7 +130,7 @@ properties = {
 	},
 	commentActivities: {
 		title: "Comment: Activities",
-		description: "Write comments which somehow helps to understand current piece of g-code",
+		description: "Write comments which somehow helps to understand current piece of G-code",
 		group: "configuration",
 		type: "boolean",
 		value: true,
@@ -152,46 +166,98 @@ const WARNING_WORK_OFFSET = 0;
 
 var sequenceNumber;
 
+// wcs definiton
+wcsDefinitions = {
+	useZeroOffset: true, // set to 'true' to allow for workoffset 0, 'false' treats 0 as 1
+	wcs: [
+		{ name: "Standard", format: "gFormat", range: [54, 59] }, // standard WCS, output as G54-G59
+		{ name: "Extended", format: "G59.#", range: [1, 9] } // extended WCS, output as G59.7, etc.
+	]
+};
+
+
+var state = {
+	retractedX: false, // specifies that the machine has been retracted in X
+	retractedY: false, // specifies that the machine has been retracted in Y
+	retractedZ: false, // specifies that the machine has been retracted in Z
+	mainState: true // specifies the current context of the state (true = main, false = optional)
+};
+
 // Formats
-var G = createFormat({ prefix: "G", decimals: 2 });
-var M = createFormat({ prefix: "M", decimals: 0 });
+var gFormat = createFormat({ prefix: "G", decimals: 1, minDigitsLeft: 1 });
+var mFormat = createFormat({ prefix: "M", decimals: 0, minDigitsLeft: 1 });
+var hFormat = createFormat({ prefix: "H", decimals: 0, minDigitsLeft: 1 });
+var sFormat = createFormat({ prefix: "S", decimals: 0, minDigitsLeft: 1 });
+var diameterOffsetFormat = createFormat({ prefix: "D", decimals: 0, minDigitsLeft: 1 });
 
-var XYZ = createFormat({ decimals: (unit == MM ? 3 : 4) });
-var X = createFormat({ prefix: "X", decimals: (unit == MM ? 3 : 4) });
-var Y = createFormat({ prefix: "Y", decimals: (unit == MM ? 3 : 4) });
-var Z = createFormat({ prefix: "Z", decimals: (unit == MM ? 3 : 4) });
-var I = createFormat({ prefix: "I", decimals: (unit == MM ? 3 : 4) });
-var J = createFormat({ prefix: "J", decimals: (unit == MM ? 3 : 4) });
-var K = createFormat({ prefix: "K", decimals: (unit == MM ? 3 : 4) });
-
-var speedFormat = createFormat({ decimals: 0 });
-var S = createFormat({ prefix: "S", decimals: 0 });
-
-var P = createFormat({ prefix: "P", decimals: 0 });
-var O = createFormat({ prefix: "O", decimals: 0 });
-var L = createFormat({ prefix: "L", decimals: 0 });
-var H = createFormat({ prefix: "H", decimals: 0 });
-
-var feedFormat = createFormat({ decimals: (unit == MM ? 0 : 2) });
-var F = createFormat({ prefix: "F", decimals: (unit == MM ? 0 : 2) });
-
+var xyzFormat = createFormat({ decimals: (unit == MM ? 3 : 4) });
+var abcFormat = createFormat({ decimals: 3, type: FORMAT_REAL, scale: DEG });
+var fpmFormat = createFormat({ decimals: (unit == MM ? 1 : 2) });
+var fprFormat = createFormat({ type: FORMAT_REAL, decimals: (unit == MM ? 3 : 4), minimum: (unit == MM ? 0.001 : 0.0001) });
+var feedFormat = fpmFormat;
+var inverseTimeFormat = createFormat({ decimals: 3, type: FORMAT_REAL });
 var toolFormat = createFormat({ decimals: 0 });
-var T = createFormat({ prefix: "T", decimals: 0 });
-
+var rpmFormat = createFormat({ decimals: 0 });
+var secFormat = createFormat({ decimals: 3, type: FORMAT_REAL }); // seconds - range 0.001-1000
 var taperFormat = createFormat({ decimals: 1, scale: DEG });
-var secFormat = createFormat({ decimals: 3, forceDecimal: true }); // seconds - range 0.001-1000
 
-// Linear outputs
-var xOutput = createVariable({}, X);
-var yOutput = createVariable({}, Y);
-var zOutput = createVariable({}, Z);
-var fOutput = createVariable({ force: true }, F);
-var sOutput = createVariable({ force: true }, S);
+var xOutput = createOutputVariable({ onchange: function () { state.retractedX = false; }, prefix: "X" }, xyzFormat);
+var yOutput = createOutputVariable({ onchange: function () { state.retractedY = false; }, prefix: "Y" }, xyzFormat);
+var zOutput = createOutputVariable({ onchange: function () { state.retractedZ = false; }, prefix: "Z" }, xyzFormat);
+var aOutput = createOutputVariable({ prefix: "A" }, abcFormat);
+var bOutput = createOutputVariable({ prefix: "B" }, abcFormat);
+var cOutput = createOutputVariable({ prefix: "C" }, abcFormat);
+var feedOutput = createOutputVariable({ prefix: "F", control: CONTROL_FORCE }, feedFormat);
 
-// Circular outputs
-var iOutput = createReferenceVariable({}, I);
-var jOutput = createReferenceVariable({}, J);
-var kOutput = createReferenceVariable({}, K);
+var inverseTimeOutput = createOutputVariable({ prefix: "F", control: CONTROL_FORCE }, inverseTimeFormat);
+var sOutput = createOutputVariable({ prefix: "S", control: CONTROL_FORCE }, rpmFormat);
+var iOutput = createOutputVariable({ prefix: "I", control: CONTROL_NONZERO }, xyzFormat);
+var jOutput = createOutputVariable({ prefix: "J", control: CONTROL_NONZERO }, xyzFormat);
+var kOutput = createOutputVariable({ prefix: "K", control: CONTROL_NONZERO }, xyzFormat);
+
+var hOutput = createOutputVariable({ prefix: "H" }, toolFormat);
+var pOutput = createOutputVariable({ prefix: "P" }, toolFormat);
+var lOutput = createOutputVariable({ prefix: "L" }, toolFormat);
+
+var gMotionModal = createOutputVariable({ control: CONTROL_FORCE }, gFormat); // modal group 1 // G0-G3, ...
+var gPlaneModal = createOutputVariable({ control: CONTROL_FORCE, onchange: function () { forceModals(gMotionModal); } }, gFormat); // modal group 2 // G17-19
+var gAbsIncModal = createOutputVariable({ control: CONTROL_FORCE }, gFormat); // modal group 3 // G90-91
+var gFeedModeModal = createOutputVariable({ control: CONTROL_FORCE }, gFormat); // modal group 5 // G93-95
+var gUnitModal = createOutputVariable({ control: CONTROL_FORCE }, gFormat); // modal group 6 // G20-21
+var gCycleModal = createOutputVariable({ control: CONTROL_FORCE }, gFormat); // modal group 9 // G81, ...
+var gRetractModal = createOutputVariable({ control: CONTROL_FORCE }, gFormat); // modal group 10 // G98-99
+var fourthAxisClamp = createOutputVariable({ control: CONTROL_FORCE }, mFormat);
+var fithAxisClamp = createOutputVariable({ control: CONTROL_FORCE }, mFormat);
+
+function forceFeed() {
+	currentFeedId = undefined;
+	feedOutput.reset();
+}
+
+/** Force output of X, Y, and Z. */
+function forceXYZ() {
+	xOutput.reset();
+	yOutput.reset();
+	zOutput.reset();
+}
+
+/** Force output of A, B, and C. */
+function forceABC() {
+	aOutput.reset();
+	bOutput.reset();
+	cOutput.reset();
+}
+
+/** Force output of X, Y, Z, A, B, C, and F on next output. */
+function forceAny() {
+	forceXYZ();
+	forceABC();
+	forceFeed();
+}
+
+function getFeed(f) {
+	return feedOutput.format(f);
+}
 
 /**
 	Writes the specified block.
@@ -205,8 +271,131 @@ function writeBlock() {
 	}
 }
 
+var receivedMachineConfiguration = false;
+
+function defineMachine() {
+	var fourthAxis = getProperty("fourthAxis");
+
+	if (fourthAxis != "0") {
+		var axis = [1, 0, 0];
+
+		switch (fourthAxis) {
+			case "1": {
+				axis = [1, 0, 0];
+
+				break;
+			}
+
+			case "2": {
+				axis = [-1, 0, 0];
+
+				break;
+			}
+
+			case "3": {
+				axis = [0, 1, 0];
+
+				break;
+			}
+
+			case "4": {
+				axis = [0, -1, 0];
+
+				break;
+			}
+		}
+
+		var aAxis = createAxis({
+			coordinate: 0,
+			table: true,
+			axis,
+			offset: [0, 0, 0],
+			cyclic: true,
+			reset: 0,
+			preference: 0,
+			tcp: false
+		});
+
+		machineConfiguration = new MachineConfiguration(aAxis);
+	} else {
+		warning("No fourth axis");
+		machineConfiguration = new MachineConfiguration();
+	}
+
+	if (machineConfiguration.isMultiAxisConfiguration()) {
+		machineConfiguration.setMultiAxisFeedrate(
+			FEED_INVERSE_TIME,
+			20000.00,
+			INVERSE_SECONDS,
+			0.0,
+			0.0,
+		);
+	}
+
+	if (machineConfiguration.isHeadConfiguration()) {
+		machineConfiguration.setVirtualTooltip(false); // translate the pivot point to the virtual tool tip for nonTCP rotary heads
+	}
+
+	setMachineConfiguration(machineConfiguration); // inform post kernel of hardcoded machine configuration
+
+	if (receivedMachineConfiguration) {
+		warning(localize("The provided CAM machine configuration is overwritten by the postprocessor."));
+		receivedMachineConfiguration = false; // CAM provided machine configuration is overwritten
+	}
+}
+
+function activateMachine() {
+	// disable unsupported rotary axes output
+	if (!machineConfiguration.isMachineCoordinate(0) && (typeof aOutput != "undefined")) {
+		aOutput.disable();
+	}
+	if (!machineConfiguration.isMachineCoordinate(1) && (typeof bOutput != "undefined")) {
+		bOutput.disable();
+	}
+	if (!machineConfiguration.isMachineCoordinate(2) && (typeof cOutput != "undefined")) {
+		cOutput.disable();
+	}
+
+	if (!machineConfiguration.isMultiAxisConfiguration()) {
+		return; // don't need to modify any settings for 3-axis machines
+	}
+
+	// save multi-axis feedrate settings from machine configuration
+	var mode = machineConfiguration.getMultiAxisFeedrateMode();
+	var type = mode == FEED_INVERSE_TIME ? machineConfiguration.getMultiAxisFeedrateInverseTimeUnits() :
+		(mode == FEED_DPM ? machineConfiguration.getMultiAxisFeedrateDPMType() : DPM_STANDARD);
+	multiAxisFeedrate = {
+		mode: mode,
+		maximum: machineConfiguration.getMultiAxisFeedrateMaximum(),
+		type: type,
+		tolerance: mode == FEED_DPM ? machineConfiguration.getMultiAxisFeedrateOutputTolerance() : 0,
+		bpwRatio: mode == FEED_DPM ? machineConfiguration.getMultiAxisFeedrateBpwRatio() : 1
+	};
+
+	if (machineConfiguration.isHeadConfiguration()) {
+		compensateToolLength = typeof compensateToolLength == "undefined" ? false : compensateToolLength;
+	}
+
+	if (machineConfiguration.isHeadConfiguration() && compensateToolLength) {
+		for (var i = 0; i < getNumberOfSections(); ++i) {
+			var section = getSection(i);
+			if (section.isMultiAxis()) {
+				machineConfiguration.setToolLength(getBodyLength(section.getTool())); // define the tool length for head adjustments
+				section.optimizeMachineAnglesByMachine(machineConfiguration, OPTIMIZE_AXIS);
+			}
+		}
+	} else {
+		optimizeMachineAngles2(OPTIMIZE_AXIS);
+	}
+}
+
 // Called in every new gcode file
 function onOpen() {
+	receivedMachineConfiguration = machineConfiguration.isReceived();
+
+	defineMachine();
+	activateMachine();
+
 	sequenceNumber = getProperty("jobSequenceNumberStart");
 	if (!getProperty("jobSeparateWordsWithSpace")) {
 		setWordSeparator("");
@@ -224,15 +413,15 @@ function onClose() {
 
 		if (getProperty("jobGoOriginOnFinish")) {
 			var z = zOutput.format(0);
-			var f = fOutput.format(propertyMmToUnit(getProperty("jobTravelSpeedZ")));
+			var f = feedOutput.format(propertyMmToUnit(getProperty("jobTravelSpeedZ")));
 
-			writeBlock(G.format(53), G.format(0), z, f);
+			writeBlock(gFormat.format(53), gFormat.format(0), z, f);
 
 			var x = xOutput.format(0);
 			var y = yOutput.format(0);
 
-			f = fOutput.format(propertyMmToUnit(getProperty("jobTravelSpeedXY")));
-			writeBlock(G.format(0), x, y, f);
+			f = feedOutput.format(propertyMmToUnit(getProperty("jobTravelSpeedXY")));
+			writeBlock(gFormat.format(0), x, y, f);
 		}
 
 		displayText("Job end");
@@ -287,9 +476,9 @@ function onSection() {
 		// Print min/max boundaries for each section
 		vectorX = new Vector(1, 0, 0);
 		vectorY = new Vector(0, 1, 0);
-		writeComment(" X Min: " + XYZ.format(currentSection.getGlobalRange(vectorX).getMinimum()) + " - X Max: " + XYZ.format(currentSection.getGlobalRange(vectorX).getMaximum()));
-		writeComment(" Y Min: " + XYZ.format(currentSection.getGlobalRange(vectorY).getMinimum()) + " - Y Max: " + XYZ.format(currentSection.getGlobalRange(vectorY).getMaximum()));
-		writeComment(" Z Min: " + XYZ.format(currentSection.getGlobalZRange().getMinimum()) + " - Z Max: " + XYZ.format(currentSection.getGlobalZRange().getMaximum()));
+		writeComment(" X Min: " + xyzFormat.format(currentSection.getGlobalRange(vectorX).getMinimum()) + " - X Max: " + xyzFormat.format(currentSection.getGlobalRange(vectorX).getMaximum()));
+		writeComment(" Y Min: " + xyzFormat.format(currentSection.getGlobalRange(vectorY).getMinimum()) + " - Y Max: " + xyzFormat.format(currentSection.getGlobalRange(vectorY).getMaximum()));
+		writeComment(" Z Min: " + xyzFormat.format(currentSection.getGlobalZRange().getMinimum()) + " - Z Max: " + xyzFormat.format(currentSection.getGlobalZRange().getMaximum()));
 	}
 
 	var workOffset = currentSection.workOffset;
@@ -304,12 +493,12 @@ function onSection() {
 		const primary = Math.floor(workOffset / 10) + 4;
 		const secondary = (workOffset % 10) - 1;
 
-		writeBlock(G.format(50 + primary) + "." + secondary); // G59.n
+		writeBlock(gFormat.format(50 + primary) + "." + secondary); // G59.n
 
 		const z = zOutput.format(0);
-		const f = fOutput.format(propertyMmToUnit(getProperty("jobTravelSpeedZ")));
+		const f = feedOutput.format(propertyMmToUnit(getProperty("jobTravelSpeedZ")));
 
-		writeBlock(G.format(53), G.format(0), z, f);
+		writeBlock(gFormat.format(53), gFormat.format(0), z, f);
 	}
 
 	onCommand(COMMAND_START_SPINDLE);
@@ -322,7 +511,7 @@ function resetAll() {
 	xOutput.reset();
 	yOutput.reset();
 	zOutput.reset();
-	fOutput.reset();
+	feedOutput.reset();
 }
 
 // Called in every section end
@@ -354,13 +543,13 @@ function onRapid(_x, _y, _z) {
 	var y = yOutput.format(_y);
 
 	if (z) {
-		f = fOutput.format(propertyMmToUnit(getProperty("jobTravelSpeedZ")));
-		writeBlock(G.format(0), z, f);
+		f = feedOutput.format(propertyMmToUnit(getProperty("jobTravelSpeedZ")));
+		writeBlock(gFormat.format(0), z, f);
 	}
 
 	if (x || y) {
-		f = fOutput.format(propertyMmToUnit(getProperty("jobTravelSpeedXY")));
-		writeBlock(G.format(0), x, y, f);
+		f = feedOutput.format(propertyMmToUnit(getProperty("jobTravelSpeedXY")));
+		writeBlock(gFormat.format(0), x, y, f);
 	}
 }
 
@@ -374,29 +563,79 @@ function onLinear(_x, _y, _z, _feed) {
 	var x = xOutput.format(_x);
 	var y = yOutput.format(_y);
 	var z = zOutput.format(_z);
-	var f = fOutput.format(_feed);
+	var f = feedOutput.format(_feed);
 	if (x || y || z) {
 		if (pendingRadiusCompensation != RADIUS_COMPENSATION_OFF) {
 			error(localize("Radius compensation mode is not supported."));
 			return;
 		} else {
-			writeBlock(G.format(1), x, y, z, f);
+			writeBlock(gFormat.format(1), x, y, z, f);
 		}
 	} else if (f) {
 		if (getNextRecord().isMotion()) { // try not to output feed without motion
-			fOutput.reset(); // force feed on next line
+			feedOutput.reset(); // force feed on next line
 		} else {
-			writeBlock(G.format(1), f);
+			writeBlock(gFormat.format(1), f);
 		}
 	}
 }
 
 function onRapid5D(_x, _y, _z, _a, _b, _c) {
-	error(localize("Multi-axis motion is not supported."));
+	if (!currentSection.isOptimizedForMachine()) {
+		forceXYZ();
+	}
+
+	var x = xOutput.format(_x);
+	var y = yOutput.format(_y);
+	var z = zOutput.format(_z);
+	var a = aOutput.format(_a);
+	var b = bOutput.format(_b);
+	var c = cOutput.format(_c);
+
+	/*
+	var a = currentSection.isOptimizedForMachine() ? aOutput.format(_a) : toolVectorOutputI.format(_a);
+	var b = currentSection.isOptimizedForMachine() ? bOutput.format(_b) : toolVectorOutputJ.format(_b);
+	var c = currentSection.isOptimizedForMachine() ? cOutput.format(_c) : toolVectorOutputK.format(_c);
+	*/
+
+	if (x || y || z || a || b || c) {
+		writeBlock(gMotionModal.format(0), x, y, z, a, b, c);
+		forceFeed();
+	}
 }
 
-function onLinear5D(_x, _y, _z, _a, _b, _c, feed) {
-	error(localize("Multi-axis motion is not supported."));
+function onLinear5D(_x, _y, _z, _a, _b, _c, feed, feedMode) {
+	if (!currentSection.isOptimizedForMachine()) {
+		forceXYZ();
+	}
+
+	var x = xOutput.format(_x);
+	var y = yOutput.format(_y);
+	var z = zOutput.format(_z);
+	var a = aOutput.format(_a);
+	var b = bOutput.format(_b);
+	var c = cOutput.format(_c);
+	/*
+	var a = currentSection.isOptimizedForMachine() ? aOutput.format(_a) : toolVectorOutputI.format(_a);
+	var b = currentSection.isOptimizedForMachine() ? bOutput.format(_b) : toolVectorOutputJ.format(_b);
+	var c = currentSection.isOptimizedForMachine() ? cOutput.format(_c) : toolVectorOutputK.format(_c);
+	*/
+
+	if (feedMode == FEED_INVERSE_TIME) {
+		forceFeed();
+	}
+	var f = feedMode == FEED_INVERSE_TIME ? inverseTimeOutput.format(feed) : getFeed(feed);
+	var fMode = feedMode == FEED_INVERSE_TIME ? 93 : 94;
+
+	if (x || y || z || a || b || c) {
+		writeBlock(gFeedModeModal.format(fMode), gMotionModal.format(1), x, y, z, a, b, c, f);
+	} else if (f) {
+		if (getNextRecord().isMotion()) { // try not to output feed without motion
+			forceFeed(); // force feed on next line
+		} else {
+			writeBlock(gFeedModeModal.format(fMode), gMotionModal.format(1), f);
+		}
+	}
 }
 
 function onCircular(clockwise, cx, cy, cz, x, y, z, feed) {
@@ -419,10 +658,10 @@ function onCircular(clockwise, cx, cy, cz, x, y, z, feed) {
 		switch (getCircularPlane()) {
 			case PLANE_XY: {
 				writeBlock(
-					G.format(17), G.format(clockwise ? 2 : 3),
+					gFormat.format(17), gFormat.format(clockwise ? 2 : 3),
 					xOutput.format(x), yOutput.format(y), zOutput.format(z),
-					iOutput.format(cx - start.x, 0), jOutput.format(cy - start.y, 0),
-					fOutput.format(feed)
+					iOutput.format(cx - start.x), jOutput.format(cy - start.y),
+					feedOutput.format(feed)
 				);
 
 				break;
@@ -430,10 +669,10 @@ function onCircular(clockwise, cx, cy, cz, x, y, z, feed) {
 
 			case PLANE_ZX: {
 				writeBlock(
-					G.format(18), G.format(clockwise ? 2 : 3),
+					gFormat.format(18), gFormat.format(clockwise ? 2 : 3),
 					xOutput.format(x), yOutput.format(y), zOutput.format(z),
-					iOutput.format(cx - start.x, 0), kOutput.format(cz - start.z, 0),
-					fOutput.format(feed)
+					iOutput.format(cx - start.x), kOutput.format(cz - start.z),
+					feedOutput.format(feed)
 				);
 
 				break;
@@ -441,10 +680,10 @@ function onCircular(clockwise, cx, cy, cz, x, y, z, feed) {
 
 			case PLANE_YZ: {
 				writeBlock(
-					G.format(19), G.format(clockwise ? 2 : 3),
+					gFormat.format(19), gFormat.format(clockwise ? 2 : 3),
 					xOutput.format(x), yOutput.format(y), zOutput.format(z),
-					jOutput.format(cy - start.y, 0), kOutput.format(cz - start.z, 0),
-					fOutput.format(feed)
+					jOutput.format(cy - start.y), kOutput.format(cz - start.z),
+					feedOutput.format(feed)
 				);
 
 				break;
@@ -479,7 +718,7 @@ function onDwell(seconds) {
 		warning(localize("Dwelling time is out of range."));
 	}
 	writeActivityComment(" >>> Dwell");
-	writeBlock(G.format(4), "S" + secFormat.format(seconds));
+	writeBlock(gFormat.format(4), "S" + secFormat.format(seconds));
 }
 
 // Called with every parameter in the documment/section
@@ -580,14 +819,14 @@ function setSpindleSpeed(_spindleSpeed, _clockwise) {
 		if (_spindleSpeed > 0) {
 			if (currentSpindleClockwise != _clockwise && currentSpindleSpeed > 0) {
 				writeComment('Stop the spindle before changing direction.');
-				writeBlock(M.format(5));
+				writeBlock(mFormat.format(5));
 			}
 
 			const code = _clockwise ? 3 : 4;
 
-			writeBlock(M.format(code), S.format(_spindleSpeed));
+			writeBlock(mFormat.format(code), sOutput.format(_spindleSpeed));
 		} else {
-			writeBlock(M.format(5));
+			writeBlock(mFormat.format(5));
 		}
 
 		currentSpindleSpeed = _spindleSpeed;
@@ -640,17 +879,17 @@ function onCommand(command) {
 				return;
 			}
 
-			writeBlock(G.format(49));
-			writeBlock(G.format(53), G.format(0), Z.format(0));
-			writeBlock(G.format(59.9), G.format(0), X.format(0), Y.format(0));
-			writeBlock(G.format(37));
-			writeBlock(G.format(59.9), G.format(10), L.format(10), P.format(tool.number));
-			writeBlock(G.format(43), H.format(tool.number));
+			writeBlock(gFormat.format(49));
+			writeBlock(gFormat.format(53), gFormat.format(0), zOutput.format(0));
+			writeBlock(gFormat.format(59.9), gFormat.format(0), xOutput.format(0), yOutput.format(0));
+			writeBlock(gFormat.format(37));
+			writeBlock(gFormat.format(59.9), gFormat.format(10), lOutput.format(10), pOutput.format(tool.number));
+			writeBlock(gFormat.format(43), hOutput.format(tool.number));
 
 			return;
 		}
 		case COMMAND_STOP:
-			writeBlock(M.format(0));
+			writeBlock(mFormat.format(0));
 			return;
 	}
 }
@@ -698,9 +937,9 @@ function writeFirstSection() {
 
 	writeComment(" ");
 	writeComment(" Ranges table:");
-	writeComment(" X: Min=" + XYZ.format(ranges.x.min) + " Max=" + XYZ.format(ranges.x.max) + " Size=" + XYZ.format(ranges.x.max - ranges.x.min));
-	writeComment(" Y: Min=" + XYZ.format(ranges.y.min) + " Max=" + XYZ.format(ranges.y.max) + " Size=" + XYZ.format(ranges.y.max - ranges.y.min));
-	writeComment(" Z: Min=" + XYZ.format(ranges.z.min) + " Max=" + XYZ.format(ranges.z.max) + " Size=" + XYZ.format(ranges.z.max - ranges.z.min));
+	writeComment(" X: Min=" + xyzFormat.format(ranges.x.min) + " Max=" + xyzFormat.format(ranges.x.max) + " Size=" + xyzFormat.format(ranges.x.max - ranges.x.min));
+	writeComment(" Y: Min=" + xyzFormat.format(ranges.y.min) + " Max=" + xyzFormat.format(ranges.y.max) + " Size=" + xyzFormat.format(ranges.y.max - ranges.y.min));
+	writeComment(" Z: Min=" + xyzFormat.format(ranges.z.min) + " Max=" + xyzFormat.format(ranges.z.max) + " Size=" + xyzFormat.format(ranges.z.max - ranges.z.min));
 
 	var toolRenderer = createToolRenderer();
 
@@ -720,7 +959,7 @@ function writeFirstSection() {
 		if (tools.getNumberOfTools() > 0) {
 			for (var i = 0; i < tools.getNumberOfTools(); ++i) {
 				var tool = tools.getTool(i);
-				var comment = " T" + toolFormat.format(tool.number) + " D=" + XYZ.format(tool.diameter) + " CR=" + XYZ.format(tool.cornerRadius);
+				var comment = " T" + toolFormat.format(tool.number) + " D=" + xyzFormat.format(tool.diameter) + " CR=" + xyzFormat.format(tool.cornerRadius);
 				if ((tool.taperAngle > 0) && (tool.taperAngle < Math.PI)) {
 					comment += " TAPER=" + taperFormat.format(tool.taperAngle) + "deg";
 				}
@@ -742,11 +981,11 @@ function writeFirstSection() {
 	writeActivityComment(" *** START begin ***");
 
 	if (getProperty("gcodeStartFile") == "") {
-		writeBlock(G.format(90)); // Set to Absolute Positioning
-		writeBlock(G.format(unit == IN ? 20 : 21));
-		writeBlock(M.format(84), S.format(0)); // Disable steppers timeout
+		writeBlock(gFormat.format(90)); // Set to Absolute Positioning
+		writeBlock(gFormat.format(unit == IN ? 20 : 21));
+		writeBlock(mFormat.format(84), sFormat.format(0)); // Disable steppers timeout
 		if (getProperty("jobSetOriginOnStart")) {
-			writeBlock(G.format(92), X.format(0), Y.format(0), Z.format(0)); // Set origin to initial position
+			writeBlock(gFormat.format(92), xOutput.format(0), yOutput.format(0), zOutput.format(0)); // Set origin to initial position
 		}
 		/*if (getProperty("probeOnStart") && tool.number != 0 && !tool.jetTool) {
 			onCommand(COMMAND_TOOL_MEASURE);
@@ -791,7 +1030,7 @@ function setCoolant(coolant) {
 	switch (coolant) {
 		case 0: { // COOLANT_DISABLED
 			writeActivityComment(" >>> Coolant Disabled");
-			writeBlock(M.format(9));
+			writeBlock(mFormat.format(9));
 
 			break;
 		}
@@ -800,14 +1039,14 @@ function setCoolant(coolant) {
 		case 2:
 		case 7: {
 			writeActivityComment(" >> Coolant on: Mist/Flood");
-			writeBlock(M.format(7));
+			writeBlock(mFormat.format(7));
 			break;
 		}
 
 		case 4: { // COOLANT_AIR
 			writeActivityComment(" >> Coolant on: Air");
-			writeBlock(M.format(9));
-			writeBlock(M.format(12));
+			writeBlock(mFormat.format(9));
+			writeBlock(mFormat.format(12));
 
 			break;
 		}
@@ -831,11 +1070,11 @@ function writeActivityComment(_comment) {
 }
 
 function flushMotions() {
-	writeBlock(M.format(400));
+	writeBlock(mFormat.format(400));
 }
 
 function displayText(txt) {
-	writeBlock(M.format(117), (getProperty("jobSeparateWordsWithSpace") ? "" : " ") + txt);
+	writeBlock(mFormat.format(117), (getProperty("jobSeparateWordsWithSpace") ? "" : " ") + txt);
 }
 
 function toolChange() {
@@ -845,6 +1084,6 @@ function toolChange() {
 	onCommand(COMMAND_COOLANT_OFF);
 	onCommand(COMMAND_STOP_SPINDLE);
 
-	writeBlock(T.format(tool.number));
-	writeBlock(M.format(6));
+	writeBlock(tFormat.format(tool.number));
+	writeBlock(mFormat.format(6));
 }
