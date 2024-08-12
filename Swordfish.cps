@@ -964,7 +964,7 @@ function writeFirstSection() {
 					comment += " TAPER=" + taperFormat.format(tool.taperAngle) + "deg";
 				}
 				if (toolZRanges[tool.number]) {
-					comment += " - ZMIN=" + XYZ.format(toolZRanges[tool.number].getMinimum());
+					comment += " - ZMIN=" + xyzFormat.format(toolZRanges[tool.number].getMinimum());
 				}
 				comment += " - " + getToolTypeName(tool.type) + " " + tool.comment;
 				writeComment(comment);
