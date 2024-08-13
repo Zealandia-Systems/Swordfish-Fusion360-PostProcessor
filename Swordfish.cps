@@ -218,6 +218,7 @@ var kOutput = createOutputVariable({ prefix: "K", control: CONTROL_NONZERO }, xy
 var hOutput = createOutputVariable({ prefix: "H" }, toolFormat);
 var pOutput = createOutputVariable({ prefix: "P" }, toolFormat);
 var lOutput = createOutputVariable({ prefix: "L" }, toolFormat);
+var tOutput = createOutputVariable({ prefix: "T" }, toolFormat);
 
 var gMotionModal = createOutputVariable({ control: CONTROL_FORCE }, gFormat); // modal group 1 // G0-G3, ...
 var gPlaneModal = createOutputVariable({ control: CONTROL_FORCE, onchange: function () { forceModals(gMotionModal); } }, gFormat); // modal group 2 // G17-19
@@ -1084,6 +1085,6 @@ function toolChange() {
 	onCommand(COMMAND_COOLANT_OFF);
 	onCommand(COMMAND_STOP_SPINDLE);
 
-	writeBlock(tFormat.format(tool.number));
+	writeBlock(tOutput.format(tool.number));
 	writeBlock(mFormat.format(6));
 }
